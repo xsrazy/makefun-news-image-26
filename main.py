@@ -1,228 +1,263 @@
 #!/usr/bin/env python3
-"""make.fun bounty news-image-20261126.
+"""THE WORLD TODAY - front page for Thursday 26 November 2026.
 
-Sum up 26 November 2026 world news in one image.
+Draws a newspaper front page summarising the day's world news as a
+single 1024x1024 PNG. Everything is painted from scratch with Pillow:
+no downloaded assets, no network calls, no randomness and no clock
+reads, so two runs produce byte-identical output.
 
-Draws a newspaper front page (1024x1024 PNG) with PIL. No network,
-no randomness, no timestamps: two runs write byte-identical files.
-Writes to /output/entry.png (or $MAKEFUN_OUTPUT_DIR/entry.png).
+Run:  python3 main.py
+Out:  $MAKEFUN_OUTPUT_DIR/entry.png  (or /output/entry.png)
 """
+
 import os
 
 from PIL import Image, ImageDraw, ImageFont
 
-W = H = 1024
-MARGIN = 36
-CONTENT_W = W - 2 * MARGIN
+# ---------------------------------------------------------------- palette
+PAPER = (247, 243, 232)   # warm newsprint
+INK = (16, 16, 16)        # near-black headline ink
+FLAG_RED = (185, 28, 28)  # kicker red / lead accent bar
+NAVY = (30, 58, 95)       # dateline, navy accent bars, ticker fill
+GREY = (96, 94, 88)       # standfirst and footer grey
+SKY = (214, 228, 240)     # globe fill
+BODY_INK = (28, 28, 28)   # body copy
 
-PAPER = (247, 243, 232)
-INK = (17, 17, 17)
-RED = (185, 28, 28)
-NAVY = (30, 58, 95)
-GREY = (90, 86, 76)
-LIGHT_GREY = (210, 204, 188)
-CARD = (255, 252, 244)
-GOLD = (176, 141, 58)
+# ---------------------------------------------------------------- typefaces
+FONT_DIR = "/usr/share/fonts/truetype"
+FACES = {
+    "serif_b": os.path.join(FONT_DIR, "dejavu", "DejaVuSerif-Bold.ttf"),
+    "serif_i": os.path.join(FONT_DIR, "noto", "NotoSerif-Italic.ttf"),
+    "sans": os.path.join(FONT_DIR, "dejavu", "DejaVuSans.ttf"),
+    "sans_b": os.path.join(FONT_DIR, "dejavu", "DejaVuSans-Bold.ttf"),
+}
 
-SERIF_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
-SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
-SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-SANS_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-
-
-def font(path, size):
-    return ImageFont.truetype(path, size)
+PAGE = 1024
+GUTTER = 36          # content inset from the page edge
+RIGHT = PAGE - GUTTER
 
 
-def wrap(draw, text, fnt, max_w):
-    """Greedy word wrap, returns list of lines that fit max_w."""
+def load_face(kind, size):
+    """Return a truetype face, falling back to Pillow's built-in font."""
+    try:
+        return ImageFont.truetype(FACES[kind], size)
+    except (OSError, KeyError):
+        return ImageFont.load_default()
+
+
+def shrink_to_fit(text, kind, start, max_width):
+    """Largest face size at or below `start` whose text fits `max_width`."""
+    size = start
+    while size > 8:
+        face = load_face(kind, size)
+        if face.getlength(text) <= max_width:
+            return face
+        size -= 1
+    return load_face(kind, 8)
+
+
+def wrap_lines(text, face, max_width):
+    """Greedy word wrap; returns a list of lines that fit `max_width`."""
     lines = []
-    for para in text.split("\n"):
-        words = para.split()
-        if not words:
-            lines.append("")
-            continue
-        cur = words[0]
-        for word in words[1:]:
-            trial = cur + " " + word
-            if draw.textlength(trial, font=fnt) <= max_w:
-                cur = trial
-            else:
-                lines.append(cur)
-                cur = word
-        lines.append(cur)
+    current = ""
+    for word in text.split():
+        trial = word if not current else current + " " + word
+        if face.getlength(trial) <= max_width:
+            current = trial
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
     return lines
 
 
-def draw_wrapped(draw, text, fnt, x, y, max_w, fill, spacing=4):
-    lines = wrap(draw, text, fnt, max_w)
-    for line in lines:
-        draw.text((x, y), line, font=fnt, fill=fill)
-        y += fnt.size + spacing
-    return y
+class FrontPage:
+    """Owns the canvas and paints every element of the front page."""
+
+    def __init__(self):
+        self.sheet = Image.new("RGB", (PAGE, PAGE), PAPER)
+        self.pen = ImageDraw.Draw(self.sheet)
+
+    # ------------------------------------------------------------ helpers
+    def centred(self, text, y, kind, size, colour):
+        face = load_face(kind, size)
+        self.pen.text((PAGE // 2, y), text, font=face, fill=colour,
+                      anchor="ma")
+
+    def left(self, text, x, y, kind, size, colour):
+        face = load_face(kind, size)
+        self.pen.text((x, y), text, font=face, fill=colour, anchor="la")
+
+    def paragraph(self, text, x, y, width, kind, size, leading, colour):
+        """Wrapped body copy; returns the y just below the last line."""
+        face = load_face(kind, size)
+        cursor = y
+        for line in wrap_lines(text, face, width):
+            self.pen.text((x, cursor), line, font=face, fill=colour,
+                          anchor="la")
+            cursor += leading
+        return cursor
+
+    def frame(self):
+        """Double black border framing the whole page."""
+        self.pen.rectangle((10, 10, PAGE - 11, PAGE - 11), outline=INK,
+                           width=2)
+        self.pen.rectangle((20, 20, PAGE - 21, PAGE - 21), outline=INK,
+                           width=1)
+
+    # ------------------------------------------------------------ masthead
+    def nameplate(self):
+        self.centred("THE WORLD IN ONE IMAGE", 42, "sans_b", 21, FLAG_RED)
+        face = shrink_to_fit("THE WORLD TODAY", "serif_b", 92,
+                             RIGHT - GUTTER)
+        self.pen.text((PAGE // 2, 64), "THE WORLD TODAY", font=face,
+                      fill=INK, anchor="ma")
+        self.pen.line((GUTTER, 160, RIGHT, 160), fill=INK, width=3)
+        self.pen.line((GUTTER, 167, RIGHT, 167), fill=INK, width=1)
+        self.centred("THURSDAY, 26 NOVEMBER 2026", 178, "sans_b", 27, NAVY)
+        self.centred("Five stories that defined the day, on one page",
+                     208, "serif_i", 20, GREY)
+
+    # ------------------------------------------------------------ artwork
+    def globe_and_bars(self, cx, cy, radius):
+        """Wireframe globe with a small rising bar chart beneath it."""
+        self.pen.ellipse((cx - radius, cy - radius, cx + radius,
+                          cy + radius), fill=SKY, outline=NAVY, width=3)
+        self.pen.ellipse((cx - 22, cy - radius, cx + 22, cy + radius),
+                         outline=NAVY, width=2)
+        self.pen.ellipse((cx - radius, cy - 18, cx + radius, cy + 18),
+                         outline=NAVY, width=2)
+        self.pen.line((cx - radius, cy, cx + radius, cy), fill=NAVY,
+                      width=2)
+        base = cy + radius + 26
+        widths = (26, 26, 26)
+        heights = (16, 30, 44)
+        start_x = cx - (sum(widths) + 16) // 2
+        x = start_x
+        for w, h in zip(widths, heights):
+            self.pen.rectangle((x, base - h, x + w, base), fill=FLAG_RED)
+            x += w + 8
+
+    # ------------------------------------------------------------ stories
+    def lead_story(self, story):
+        x0, y0, x1, y1 = GUTTER, 232, RIGHT, 470
+        self.pen.rectangle((x0, y0, x1, y1), outline=INK, width=2)
+        self.pen.rectangle((x0, y0, x1, y0 + 9), fill=FLAG_RED)
+        self.left(story["tag"], x0 + 16, y0 + 20, "sans_b", 20, FLAG_RED)
+        cursor = y0 + 44
+        for line in story["headline"]:
+            self.left(line, x0 + 16, cursor, "serif_b", 50, INK)
+            cursor += 50
+        self.paragraph(story["body"], x0 + 16, cursor + 10, 640,
+                       "sans", 21, 27, BODY_INK)
+        self.globe_and_bars(848, 330, 60)
+
+    def story_card(self, box, story):
+        """One of the four smaller stories in the two-by-two grid."""
+        x0, y0, x1, y1 = box
+        self.pen.rectangle((x0, y0, x1, y1), outline=INK, width=2)
+        self.pen.rectangle((x0, y0, x1, y0 + 7), fill=story["accent"])
+        self.left(story["tag"], x0 + 16, y0 + 14, "sans_b", 19,
+                  story["accent"])
+        cursor = y0 + 40
+        for line in story["headline"]:
+            self.left(line, x0 + 16, cursor, "serif_b", 34, INK)
+            cursor += 42
+        self.paragraph(story["body"], x0 + 16, cursor + 8, x1 - x0 - 32,
+                       "sans", 19, 25, BODY_INK)
+
+    # ------------------------------------------------------------ footer
+    def ticker_and_sources(self):
+        self.pen.rectangle((GUTTER, 922, RIGHT, 964), fill=NAVY)
+        ticker = ("ALSO TODAY: Thanksgiving in the US | Record double "
+                  "century at 15 | N. Korea expels Swiss envoy | "
+                  "Hera's Dimorphos close-ups")
+        face = shrink_to_fit(ticker, "sans_b", 19, RIGHT - GUTTER - 16)
+        self.pen.text((PAGE // 2, 943), ticker, font=face,
+                      fill=(255, 255, 255), anchor="mm")
+        self.centred("Sources: Reuters, AP, BBC, AFP. All stories in "
+                     "Thursday's editions, 26 November 2026.",
+                     974, "sans", 15, GREY)
+
+    # ------------------------------------------------------------ assembly
+    def build(self):
+        self.frame()
+        self.nameplate()
+        self.lead_story(LEAD)
+        grid = [
+            ((GUTTER, 484, 502, 692), GRID[0]),
+            ((522, 484, RIGHT, 692), GRID[1]),
+            ((GUTTER, 706, 502, 908), GRID[2]),
+            ((522, 706, RIGHT, 908), GRID[3]),
+        ]
+        for box, story in grid:
+            self.story_card(box, story)
+        self.ticker_and_sources()
+        return self.sheet
 
 
-def centered(draw, text, fnt, cx, y, fill):
-    w = draw.textlength(text, font=fnt)
-    draw.text((cx - w / 2, y), text, font=fnt, fill=fill)
-    return y + fnt.size
+# ------------------------------------------------------------------- copy
+LEAD = {
+    "tag": "TRADE WAR RETURNS",
+    "headline": ["TRUMP'S NEW TARIFFS", "HIT 14 PARTNERS"],
+    "body": ("Washington unveils Section 301 duties of up to 40% on "
+             "China, Japan, the EU and 11 others; China capped at 20%, "
+             "the EU at 15%. Markets fall."),
+}
+
+GRID = [
+    {
+        "tag": "CAIRO DISASTER",
+        "accent": FLAG_RED,
+        "headline": ["30 KILLED IN CAIRO"],
+        "body": ("A fuel tanker overturns on Cairo's ring road and "
+                 "bursts into flames, killing at least 30 people and "
+                 "injuring 25, Egyptian officials say."),
+    },
+    {
+        "tag": "WAR IN UKRAINE",
+        "accent": NAVY,
+        "headline": ["RUSSIA'S WAR DEAD", "NEAR 500,000"],
+        "body": ("Moscow's own figures show nearly 500,000 people lost "
+                 "in the Ukraine war, the BBC reports. Kyiv says it hit "
+                 "five Russian jets."),
+    },
+    {
+        "tag": "BANGLADESH",
+        "accent": FLAG_RED,
+        "headline": ["GARMENT PAY UP 36%"],
+        "body": ("Bangladesh raises garment workers' minimum wage to "
+                 "17,000 taka a month after weeks of protests that shut "
+                 "factories; workers had wanted double."),
+    },
+    {
+        "tag": "COLOMBIA",
+        "accent": NAVY,
+        "headline": ["10 YEARS OF PEACE"],
+        "body": ("Colombia marks a decade since its historic peace "
+                 "accord, as the UN chief praises progress and warns "
+                 "unfinished commitments remain."),
+    },
+]
 
 
-def draw_globe(draw, cx, cy, r, line_col, fill_col):
-    """Simple line-art globe: circle, meridians, parallels."""
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill_col,
-                 outline=line_col, width=4)
-    draw.ellipse([cx - r // 2, cy - r, cx + r // 2, cy + r],
-                 outline=line_col, width=3)
-    draw.line([cx - r, cy, cx + r, cy], fill=line_col, width=3)
-    draw.arc([cx - r, cy - r // 2, cx + r, cy + r // 2], 0, 180,
-             fill=line_col, width=3)
-    draw.arc([cx - r, cy - r // 2, cx + r, cy + r // 2], 180, 360,
-             fill=line_col, width=3)
-
-
-def draw_bars(draw, x, y, w, h, fill):
-    """Three rising bars, a tiny trade chart."""
-    bw = w // 4
-    heights = [h // 3, (2 * h) // 3, h]
-    for i, bh in enumerate(heights):
-        bx = x + i * (bw + 6)
-        draw.rectangle([bx, y + h - bh, bx + bw, y + h], fill=fill)
-
-
-def build():
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
-
-    # --- outer frame ---
-    d.rectangle([14, 14, W - 15, H - 15], outline=INK, width=3)
-    d.rectangle([22, 22, W - 23, H - 23], outline=GOLD, width=1)
-
-    # --- masthead (explicit y positions so nothing runs off the page) ---
-    f_kicker = font(SANS_BOLD, 20)
-    centered(d, "THE WORLD IN ONE IMAGE", f_kicker, W // 2, 38, RED)
-    f_title = font(SERIF_BOLD, 74)
-    centered(d, "THE WORLD TODAY", f_title, W // 2, 66, INK)
-    d.line([MARGIN, 150, W - MARGIN, 150], fill=INK, width=3)
-    d.line([MARGIN, 158, W - MARGIN, 158], fill=INK, width=1)
-    f_date = font(SANS_BOLD, 24)
-    centered(d, "THURSDAY, 26 NOVEMBER 2026", f_date, W // 2, 170, NAVY)
-    f_sub = font(SANS, 18)
-    centered(d, "Five stories that defined the day, on one page",
-             f_sub, W // 2, 200, GREY)
-    y = 222
-
-    # --- lead story ---
-    lead_top = y
-    lead_h = 248
-    lead_bot = lead_top + lead_h
-    d.rectangle([MARGIN, lead_top, W - MARGIN, lead_bot],
-                fill=CARD, outline=INK, width=2)
-    d.rectangle([MARGIN, lead_top, W - MARGIN, lead_top + 8],
-                fill=RED)
-    lx = MARGIN + 24
-    ly = lead_top + 22
-    f_lead_kick = font(SANS_BOLD, 21)
-    d.text((lx, ly), "TRADE WAR RETURNS", font=f_lead_kick, fill=RED)
-    ly += 32
-    f_lead_head = font(SERIF_BOLD, 46)
-    d.text((lx, ly), "TRUMP'S NEW TARIFFS", font=f_lead_head, fill=INK)
-    ly += 52
-    d.text((lx, ly), "HIT 14 PARTNERS", font=f_lead_head, fill=INK)
-    ly += 54
-    f_lead_deck = font(SANS, 20)
-    draw_wrapped(d, "Washington unveils Section 301 duties of up to "
-                 "40% on China, Japan, the EU and 11 others; China "
-                 "capped at 20%, the EU at 15%. Markets fall.",
-                 f_lead_deck, lx, ly, 600, INK, spacing=4)
-    # globe + bars art on the right of the lead box
-    gx, gy = 830, lead_top + 112
-    draw_globe(d, gx, gy, 66, NAVY, (226, 234, 244))
-    draw_bars(d, gx - 52, gy + 72, 104, 44, RED)
-
-    # --- 2x2 grid of supporting stories ---
-    stories = [
-        ("CAIRO DISASTER", "30 KILLED IN CAIRO",
-         "A fuel tanker overturns on Cairo's ring road and bursts "
-         "into flames, killing at least 30 people and injuring 25, "
-         "Egyptian officials say.", RED),
-        ("WAR IN UKRAINE", "RUSSIA'S WAR DEAD\nNEAR 500,000",
-         "Moscow's own figures show nearly 500,000 people lost in "
-         "the Ukraine war, the BBC reports. Kyiv says it hit five "
-         "Russian jets.", NAVY),
-        ("BANGLADESH", "GARMENT PAY UP 36%",
-         "Bangladesh raises garment workers' minimum wage to 17,000 "
-         "taka a month after weeks of protests that shut factories; "
-         "workers had wanted double.", RED),
-        ("COLOMBIA", "10 YEARS OF PEACE",
-         "Colombia marks a decade since its historic peace accord, "
-         "as the UN chief praises progress and warns unfinished "
-         "commitments remain.", NAVY),
-    ]
-    grid_top = lead_bot + 16
-    cell_w = (CONTENT_W - 16) // 2
-    cell_h = 200
-    f_kick = font(SANS_BOLD, 18)
-    f_head = font(SERIF_BOLD, 30)
-    f_body = font(SANS, 19)
-    for i, (kick, head, body, accent) in enumerate(stories):
-        col = i % 2
-        row = i // 2
-        x0 = MARGIN + col * (cell_w + 16)
-        y0 = grid_top + row * (cell_h + 16)
-        d.rectangle([x0, y0, x0 + cell_w, y0 + cell_h],
-                    fill=CARD, outline=INK, width=2)
-        d.rectangle([x0, y0, x0 + cell_w, y0 + 7], fill=accent)
-        tx = x0 + 18
-        ty = y0 + 18
-        d.text((tx, ty), kick, font=f_kick, fill=accent)
-        ty += 28
-        head_lines = wrap(d, head, f_head, cell_w - 36)[:2]
-        for line in head_lines:
-            d.text((tx, ty), line, font=f_head, fill=INK)
-            ty += 36
-        ty += 6
-        draw_wrapped(d, body, f_body, tx, ty, cell_w - 36, INK,
-                     spacing=4)
-
-    # --- bottom ticker ---
-    tick_top = grid_top + 2 * cell_h + 16 + 14
-    tick_h = 46
-    d.rectangle([MARGIN, tick_top, W - MARGIN, tick_top + tick_h],
-                fill=NAVY)
-    ticker = ("ALSO TODAY: Thanksgiving in the US | Record double "
-              "century at 15 | N. Korea expels Swiss envoy | Hera's "
-              "Dimorphos close-ups")
-    tick_size = 20
-    while tick_size > 12:
-        f_tick = font(SANS_BOLD, tick_size)
-        if d.textlength(ticker, font=f_tick) <= CONTENT_W - 24:
-            break
-        tick_size -= 1
-    tw = d.textlength(ticker, font=f_tick)
-    d.text(((W - tw) / 2, tick_top + (tick_h - tick_size) / 2 - 2),
-           ticker, font=f_tick, fill=(255, 255, 255))
-
-    # --- footer ---
-    f_foot = font(SANS, 15)
-    centered(d, "Sources: Reuters, AP, BBC, AFP. All stories in "
-             "Thursday's editions, 26 November 2026.", f_foot, W // 2,
-             tick_top + tick_h + 10, GREY)
-
-    return img
+def destination():
+    """Output folder: $MAKEFUN_OUTPUT_DIR, else /output."""
+    return os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 
 
 def main():
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "entry.png")
-    img = build()
-    img.save(out_path, format="PNG")
+    page = FrontPage().build()
+    folder = destination()
+    os.makedirs(folder, exist_ok=True)
+    target = os.path.join(folder, "entry.png")
+    page.save(target, format="PNG")
     try:
-        os.chmod(out_path, 0o644)
+        os.chmod(target, 0o644)
     except OSError:
         pass
-    print("wrote", out_path)
 
 
 if __name__ == "__main__":
